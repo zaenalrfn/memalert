@@ -2,70 +2,74 @@ import time
 import logging
 from typing import Dict, Any, Tuple
 from backend.app.services.goplus_client import GoPlusClient
+from backend.app.services.spk_engine import SPKEngine
 
 logger = logging.getLogger(__name__)
 
 class FilterEngine:
     def __init__(self):
         self.goplus_client = GoPlusClient()
+        self.spk_engine = SPKEngine()
+
+    @staticmethod
+    def _with_defaults(token_data: Dict[str, Any]) -> Dict[str, Any]:
+        token_data.setdefault("graduation_status", "bonding_curve")
+        token_data.setdefault("safety_score", 0.0)
+        token_data.setdefault("spk_score", 0.0)
+        token_data.setdefault("mint_renounced", True)
+        token_data.setdefault("freeze_renounced", True)
+        token_data.setdefault("lp_status", "unknown")
+        token_data.setdefault("top_holder_pct", None)
+        return token_data
 
     async def evaluate_token(
         self,
         token_data: Dict[str, Any],
         config: Dict[str, Any]
-    ) -> Tuple[bool, str]:
+    ) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Mengevaluasi token terhadap filter_config.
-        Return: (is_passed: bool, rejection_reason: str)
+        Return: (is_passed: bool, rejection_reason: str, updated_token_data: dict)
         """
+        token_data = self._with_defaults(token_data)
         symbol = token_data.get("symbol", "").upper()
         name = token_data.get("name", "").lower()
         liquidity = token_data.get("liquidity_usd", 0.0)
         volume_5m = token_data.get("volume_5m_usd", 0.0)
-        buys = token_data.get("txns_buy", 0)
-        sells = token_data.get("txns_sell", 0)
-        pair_created_at = token_data.get("pair_created_at")  # ms timestamp
+        pair_created_at = token_data.get("pair_created_at")
 
-        # 1. Blacklist keywords check
+        # 1. Blacklist
         blacklist_raw = config.get("blacklist_keywords", "test,scam,airdrop,pump")
         blacklist = [k.strip().lower() for k in blacklist_raw.split(",") if k.strip()]
         for kw in blacklist:
             if kw in name or kw in symbol.lower():
-                return False, f"Name/Symbol contains blacklisted keyword: '{kw}'"
+                return False, f"Blacklisted: {kw}", token_data
 
-        # 2. Minimum liquidity check
-        min_liq = float(config.get("min_liquidity_usd", 5000.0))
-        if liquidity < min_liq:
-            return False, f"Liquidity ${liquidity:,.0f} < min ${min_liq:,.0f}"
+        # 2. Liquidity & Volume
+        if liquidity < float(config.get("min_liquidity_usd", 5000)):
+            return False, "Low Liquidity", token_data
+        if volume_5m < float(config.get("min_volume_5m_usd", 1000)):
+            return False, "Low Volume", token_data
 
-        # 3. Minimum volume 5m check
-        min_vol = float(config.get("min_volume_5m_usd", 1000.0))
-        if volume_5m < min_vol:
-            return False, f"Volume 5m ${volume_5m:,.0f} < min ${min_vol:,.0f}"
-
-        # 4. Max age minutes check
-        max_age = int(config.get("max_age_minutes", 60))
+        # 3. Age
         if pair_created_at:
-            now_ms = time.time() * 1000
-            age_minutes = (now_ms - pair_created_at) / (1000 * 60)
-            if age_minutes > max_age:
-                return False, f"Pool age {age_minutes:.1f}m > max {max_age}m"
+            age_min = (time.time() * 1000 - pair_created_at) / 60000
+            if age_min > int(config.get("max_age_minutes", 60)):
+                return False, "Too Old", token_data
 
-        # 5. Buy/Sell ratio check
-        min_bs = float(config.get("min_buy_sell_ratio", 1.2))
-        bs_ratio = buys / max(sells, 1)
-        if bs_ratio < min_bs:
-            return False, f"Buy/Sell ratio {bs_ratio:.2f} < min {min_bs}"
+        # 4. Security & Safety Score
+        sec = await self.goplus_client.check_token_security(token_data["token_address"])
+        if sec.get("is_honeypot"):
+            return False, "Honeypot Detected", token_data
 
-        # 6. Basic security check via GoPlus API
-        req_mint = bool(config.get("require_mint_renounced", True))
-        req_lp = bool(config.get("require_lp_locked", True))
+        token_data.update({
+            "mint_renounced": sec.get("mint_renounced", True),
+            "freeze_renounced": sec.get("freeze_renounced", True),
+            "top_holder_pct": sec.get("top_holder_pct"),
+            "lp_status": sec.get("lp_status", "unknown"),
+            "graduation_status": "dex" if "raydium" in (token_data.get("url", "").lower()) else token_data.get("graduation_status", "bonding_curve")
+        })
+        
+        token_data["safety_score"] = self.spk_engine.calculate_safety_score(token_data)
 
-        if req_mint or req_lp:
-            sec = await self.goplus_client.check_token_security(token_data["token_address"])
-            if req_mint and not sec.get("mint_renounced", True):
-                return False, "Mint authority not renounced"
-            if sec.get("is_honeypot", False):
-                return False, "Detected as honeypot risk"
-
-        return True, "PASSED"
+        return True, "PASSED", token_data

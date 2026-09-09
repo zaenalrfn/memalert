@@ -26,17 +26,35 @@ async def init_db():
                 liquidity_usd REAL NOT NULL,
                 market_cap_usd REAL DEFAULT 0,
                 volume_5m_usd REAL NOT NULL,
+                safety_score REAL DEFAULT 0,
+                spk_score REAL DEFAULT 0,
+                graduation_status TEXT DEFAULT 'bonding_curve',
+                mint_renounced INTEGER DEFAULT 1,
+                freeze_renounced INTEGER DEFAULT 1,
+                lp_status TEXT DEFAULT 'locked',
+                top_holder_pct REAL DEFAULT 0.0,
                 pool_created_at DATETIME,
                 first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 status TEXT NOT NULL,
                 rejection_reason TEXT
             );
         """)
-        # Check if column exists, if not add it
+        # Check and add missing columns if upgrading from older db
         cursor = await db.execute("PRAGMA table_info(tokens_seen)")
         columns = [row[1] for row in await cursor.fetchall()]
-        if 'market_cap_usd' not in columns:
-            await db.execute("ALTER TABLE tokens_seen ADD COLUMN market_cap_usd REAL DEFAULT 0;")
+        for col_name, col_def in [
+            ("market_cap_usd", "REAL DEFAULT 0"),
+            ("safety_score", "REAL DEFAULT 0"),
+            ("spk_score", "REAL DEFAULT 0"),
+            ("graduation_status", "TEXT DEFAULT 'bonding_curve'"),
+            ("mint_renounced", "INTEGER DEFAULT 1"),
+            ("freeze_renounced", "INTEGER DEFAULT 1"),
+            ("lp_status", "TEXT DEFAULT 'locked'"),
+            ("top_holder_pct", "REAL DEFAULT 0.0")
+        ]:
+            if col_name not in columns:
+                await db.execute(f"ALTER TABLE tokens_seen ADD COLUMN {col_name} {col_def};")
+
 
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tokens_seen_first_seen ON tokens_seen(first_seen_at);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tokens_seen_status ON tokens_seen(status);")
@@ -45,6 +63,7 @@ async def init_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS filter_config (
                 id INTEGER PRIMARY KEY CHECK(id = 1),
+                profile TEXT DEFAULT 'balanced',
                 min_liquidity_usd REAL DEFAULT 5000.0,
                 min_volume_5m_usd REAL DEFAULT 1000.0,
                 max_age_minutes INTEGER DEFAULT 60,
@@ -56,6 +75,13 @@ async def init_db():
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
         """)
+
+        # Add profile if missing
+        cursor = await db.execute("PRAGMA table_info(filter_config)")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if 'profile' not in columns:
+            await db.execute("ALTER TABLE filter_config ADD COLUMN profile TEXT DEFAULT 'balanced';")
+
 
         # Populate default filter_config if empty
         yaml_cfg = load_yaml_config().get("filters", {})

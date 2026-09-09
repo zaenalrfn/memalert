@@ -112,6 +112,13 @@ class DexScreenerClient:
         sells = int(txns.get("sells", 0) or 0) if isinstance(txns, dict) else 0
         pair_created_at = pair.get("pairCreatedAt")  # timestamp in ms
 
+        dex_id = (pair.get("dexId") or "").lower()
+        url_lower = (pair.get("url") or "").lower()
+        if dex_id in ("raydium", "orca", "meteora") or "raydium" in url_lower:
+            graduation_status = "dex"
+        else:
+            graduation_status = "bonding_curve"
+
         return {
             "token_address": token_address,
             "pair_address": pair_address,
@@ -124,5 +131,12 @@ class DexScreenerClient:
             "txns_buy": buys,
             "txns_sell": sells,
             "pair_created_at": pair_created_at,
-            "url": pair.get("url", f"https://dexscreener.com/solana/{pair_address}")
+            "url": pair.get("url", f"https://dexscreener.com/solana/{pair_address}"),
+            "graduation_status": graduation_status,
+            "safety_score": 0.0,
+            "spk_score": 0.0,
+            "mint_renounced": True,
+            "freeze_renounced": True,
+            "lp_status": "unknown",
+            "top_holder_pct": 0.0,
         }

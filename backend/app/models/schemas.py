@@ -11,6 +11,13 @@ class TokenBase(BaseModel):
     liquidity_usd: float
     market_cap_usd: float = 0.0
     volume_5m_usd: float
+    safety_score: float = 0.0
+    spk_score: float = 0.0
+    graduation_status: str = "bonding_curve"
+    mint_renounced: bool = True
+    freeze_renounced: bool = True
+    lp_status: str = "locked"
+    top_holder_pct: Optional[float] = None
     pool_created_at: Optional[datetime] = None
 
 class TokenCreate(TokenBase):
@@ -27,6 +34,7 @@ class TokenListResponse(BaseModel):
     items: List[TokenResponse]
 
 class FilterConfigSchema(BaseModel):
+    profile: str = Field(default="balanced")
     min_liquidity_usd: float = Field(default=5000.0, ge=0)
     min_volume_5m_usd: float = Field(default=1000.0, ge=0)
     max_age_minutes: int = Field(default=60, ge=1)
